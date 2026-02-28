@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pages: write
+      id-token: write
     env:
       LIMIT: ${{ github.event.inputs.limit || '0' }}
       WORKERS: ${{ github.event.inputs.workers || '4' }}
@@ -42,6 +44,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Generate catalog HTML
         shell: bash
