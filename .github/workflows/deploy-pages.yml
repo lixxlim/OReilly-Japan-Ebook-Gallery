@@ -1,0 +1,84 @@
+name: Build and Deploy Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Number of books to process (0 = all)"
+        required: false
+        default: "0"
+      workers:
+        description: "Concurrent workers for detail pages"
+        required: false
+        default: "4"
+      refresh_images:
+        description: "Ignore image cache and refresh all images"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      LIMIT: ${{ github.event.inputs.limit || '0' }}
+      WORKERS: ${{ github.event.inputs.workers || '4' }}
+      REFRESH_IMAGES: ${{ github.event.inputs.refresh_images || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate catalog HTML
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+
+          cmd=(
+            python oreilly_ebook_to_html.py
+            --output output/index.html
+            --cache "$RUNNER_TEMP/oreilly_ebook_image_cache.json"
+            --limit "$LIMIT"
+            --workers "$WORKERS"
+          )
+
+          if [[ "$REFRESH_IMAGES" == "true" ]]; then
+            cmd+=(--refresh-images)
+          fi
+
+          "${cmd[@]}"
+          cp output/index.html output/404.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
