@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scrape O'Reilly Japan ebook list and generate a standalone HTML catalog.
+Scrape O'Reilly Japan ebook + catalog lists and generate two HTML galleries.
 
 Output fields per book:
 - title
@@ -12,7 +12,7 @@ Output fields per book:
 Usage:
   python3 oreilly_ebook_to_html.py
   python3 oreilly_ebook_to_html.py --limit 50 --workers 4
-  python3 oreilly_ebook_to_html.py --output output/ebooks.html
+  python3 oreilly_ebook_to_html.py --output output/index.html --book-output output/book/index.html
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import html
 import json
 import re
 import time
+from datetime import date
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -31,10 +32,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-LIST_URL = "https://www.oreilly.co.jp/ebook/"
+LIST_URL_EBOOK = "https://www.oreilly.co.jp/ebook/"
+LIST_URL_BOOK = "https://www.oreilly.co.jp/catalog/"
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = BASE_DIR / "output/oreilly_ebooks.html"
-DEFAULT_CACHE = BASE_DIR / "output/oreilly_ebook_image_cache.json"
+DEFAULT_EBOOK_OUTPUT = BASE_DIR / "output/index.html"
+DEFAULT_BOOK_OUTPUT = BASE_DIR / "output/book/index.html"
+DEFAULT_EBOOK_CACHE = BASE_DIR / "output/oreilly_ebook_image_cache.json"
+DEFAULT_BOOK_CACHE = BASE_DIR / "output/oreilly_catalog_image_cache.json"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -194,6 +198,27 @@ def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _parse_release_date(value: str) -> Optional[date]:
+    match = re.search(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", value or "")
+    if not match:
+        return None
+    year, month, day = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _sort_books_by_release_date(books: List[Book]) -> None:
+    def sort_key(book: Book) -> tuple[bool, date]:
+        parsed = _parse_release_date(book.release_date)
+        if parsed is None:
+            return (False, date.min)
+        return (True, parsed)
+
+    books.sort(key=sort_key, reverse=True)
+
+
 def fetch_text(url: str, timeout: int, retries: int) -> str:
     request = Request(url, headers={"User-Agent": USER_AGENT})
     delay = 1.0
@@ -339,16 +364,24 @@ def _book_card_html(book: Book, index: int) -> str:
 """.strip()
 
 
-def build_html(books: List[Book]) -> str:
+def _page_links(page_key: str) -> tuple[str, str]:
+    if page_key == "book":
+        return ("../index.html", "./index.html")
+    return ("./index.html", "book/index.html")
+
+
+def build_html(books: List[Book], page_title: str, page_key: str, count_label: str) -> str:
     cards = "\n".join(_book_card_html(book, idx) for idx, book in enumerate(books))
     total = len(books)
+    ebook_href, book_href = _page_links(page_key)
+    title_href = book_href if page_key == "ebook" else ebook_href
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>O'Reilly Japan Ebook Catalog</title>
+  <title>{page_title}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600&family=Shippori+Mincho+B1:wght@600;700&display=swap" rel="stylesheet">
@@ -396,6 +429,7 @@ def build_html(books: List[Book]) -> str:
       gap: 12px;
       flex-wrap: nowrap;
       overflow-x: auto;
+      overflow-y: visible;
       white-space: nowrap;
     }}
     .topbar::-webkit-scrollbar {{
@@ -412,6 +446,21 @@ def build_html(books: List[Book]) -> str:
       font-size: var(--title-size);
       line-height: 1.1;
       flex: 0 0 auto;
+    }}
+    .top-title a {{
+      color: inherit;
+      text-decoration: none;
+      padding: 4px 6px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+    }}
+    .top-title a:hover {{
+      background: rgba(14, 122, 90, 0.08);
+    }}
+    .top-title a:focus-visible {{
+      outline: 2px solid rgba(14, 122, 90, 0.6);
+      outline-offset: 3px;
     }}
     .top-count {{
       font-size: calc(var(--title-size) * 0.5);
@@ -546,11 +595,11 @@ def build_html(books: List[Book]) -> str:
     }}
   </style>
 </head>
-<body>
+<body data-page="{page_key}">
   <main class="wrap">
     <section class="topbar">
-      <h1 class="top-title">O'Reilly Japan Ebook Gallery</h1>
-      <span class="top-count">Books: <strong>{total}</strong></span>
+      <h1 class="top-title"><a href="{title_href}">{page_title}</a></h1>
+      <span class="top-count">{count_label}: <strong>{total}</strong></span>
       <input id="q" class="search" type="search" placeholder="Filter by title...">
     </section>
 
@@ -585,12 +634,34 @@ def build_html(books: List[Book]) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Scrape https://www.oreilly.co.jp/ebook/ and generate a standalone HTML "
-            "with title/image/price/release-date/detail link."
+            "Scrape https://www.oreilly.co.jp/ebook/ and https://www.oreilly.co.jp/catalog/ "
+            "and generate two HTML galleries with title/image/price/release-date/detail link."
         )
     )
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output HTML path")
-    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE, help="Image cache JSON path")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_EBOOK_OUTPUT,
+        help="Ebook HTML path",
+    )
+    parser.add_argument(
+        "--book-output",
+        type=Path,
+        default=DEFAULT_BOOK_OUTPUT,
+        help="Book HTML path",
+    )
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        default=DEFAULT_EBOOK_CACHE,
+        help="Ebook image cache JSON path",
+    )
+    parser.add_argument(
+        "--book-cache",
+        type=Path,
+        default=DEFAULT_BOOK_CACHE,
+        help="Book image cache JSON path",
+    )
     parser.add_argument("--timeout", type=int, default=25, help="HTTP timeout seconds")
     parser.add_argument("--retries", type=int, default=2, help="HTTP retries per URL")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent workers for detail pages")
@@ -609,37 +680,75 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    print(f"Fetching list page: {LIST_URL}")
-    list_html = fetch_text(LIST_URL, timeout=args.timeout, retries=args.retries)
-    books = parse_books_from_list(list_html, LIST_URL)
+def _fetch_books(list_url: str, timeout: int, retries: int) -> List[Book]:
+    print(f"Fetching list page: {list_url}")
+    list_html = fetch_text(list_url, timeout=timeout, retries=retries)
+    books = parse_books_from_list(list_html, list_url)
     if not books:
         raise RuntimeError("No books found. The page structure may have changed.")
+    return books
+
+
+def main() -> None:
+    args = parse_args()
+    ebook_books = _fetch_books(LIST_URL_EBOOK, timeout=args.timeout, retries=args.retries)
+    book_books = _fetch_books(LIST_URL_BOOK, timeout=args.timeout, retries=args.retries)
+    _sort_books_by_release_date(book_books)
 
     if args.limit > 0:
-        books = books[: args.limit]
+        ebook_books = ebook_books[: args.limit]
+        book_books = book_books[: args.limit]
 
-    print(f"Books parsed: {len(books)}")
+    print(f"Ebooks parsed: {len(ebook_books)}")
+    print(f"Books parsed: {len(book_books)}")
 
-    cache = load_cache(args.cache)
+    ebook_cache = load_cache(args.cache)
     enrich_images(
-        books=books,
-        cache=cache,
+        books=ebook_books,
+        cache=ebook_cache,
         timeout=args.timeout,
         retries=args.retries,
         workers=max(1, args.workers),
         delay=max(0.0, args.delay),
         refresh_images=args.refresh_images,
     )
-    save_cache(args.cache, cache)
+    save_cache(args.cache, ebook_cache)
 
-    html_output = build_html(books)
+    book_cache = load_cache(args.book_cache)
+    enrich_images(
+        books=book_books,
+        cache=book_cache,
+        timeout=args.timeout,
+        retries=args.retries,
+        workers=max(1, args.workers),
+        delay=max(0.0, args.delay),
+        refresh_images=args.refresh_images,
+    )
+    save_cache(args.book_cache, book_cache)
+
+    ebook_html = build_html(
+        ebook_books,
+        page_title="O'Reilly Japan Ebook Gallery",
+        page_key="ebook",
+        count_label="Ebooks",
+    )
+    book_html = build_html(
+        book_books,
+        page_title="O'Reilly Japan Gallery",
+        page_key="book",
+        count_label="Books",
+    )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(html_output, encoding="utf-8")
+    args.output.write_text(ebook_html, encoding="utf-8")
 
-    print(f"HTML written: {args.output}")
-    print(f"Cache written: {args.cache}")
+    args.book_output.parent.mkdir(parents=True, exist_ok=True)
+    args.book_output.write_text(book_html, encoding="utf-8")
+
+    print(f"Ebook HTML written: {args.output}")
+    print(f"Ebook cache written: {args.cache}")
+    print(f"Book HTML written: {args.book_output}")
+    print(f"Book cache written: {args.book_cache}")
 
 
 if __name__ == "__main__":
