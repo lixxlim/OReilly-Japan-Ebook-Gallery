@@ -375,6 +375,30 @@ def build_html(books: List[Book], page_title: str, page_key: str, count_label: s
     total = len(books)
     ebook_href, book_href = _page_links(page_key)
     title_href = book_href if page_key == "ebook" else ebook_href
+    display_title = page_title
+    if page_key == "ebook":
+        display_title = page_title.replace(
+            " Ebook ", '&nbsp;<span class="title-em">Ebook</span>&nbsp;'
+        )
+        if display_title == page_title:
+            display_title = page_title.replace(
+                "Ebook", '&nbsp;<span class="title-em">Ebook</span>&nbsp;'
+            )
+    elif page_key == "book":
+        display_title = page_title.replace(
+            " Book ", '&nbsp;<span class="title-em">Book</span>&nbsp;'
+        )
+        if display_title == page_title:
+            display_title = page_title.replace(
+                "Book", '&nbsp;<span class="title-em">Book</span>&nbsp;'
+            )
+
+    if page_key == "ebook":
+        title_fill = "#f15a4c"
+        outline_soft = "rgba(241, 90, 76, 0.35)"
+    else:
+        title_fill = "#4aa6ff"
+        outline_soft = "rgba(74, 166, 255, 0.35)"
 
     return f"""<!doctype html>
 <html lang="en">
@@ -393,6 +417,9 @@ def build_html(books: List[Book], page_title: str, page_key: str, count_label: s
       --muted: #5f6259;
       --accent: #0e7a5a;
       --accent-2: #c9673d;
+      --title-outline: #1f2421;
+      --title-outline-soft: {outline_soft};
+      --title-fill: {title_fill};
       --line: rgba(31, 36, 33, 0.15);
       --shadow: 0 16px 40px rgba(14, 20, 18, 0.12);
     }}
@@ -454,6 +481,14 @@ def build_html(books: List[Book], page_title: str, page_key: str, count_label: s
       border-radius: 12px;
       display: inline-flex;
       align-items: center;
+    }}
+    .title-em {{
+      color: var(--title-fill);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      -webkit-text-stroke: 0.6px var(--title-outline);
+      text-shadow: 0 0 2px rgba(31, 36, 33, 0.2);
+      padding: 0 4px;
     }}
     .top-title a:hover {{
       background: rgba(14, 122, 90, 0.08);
@@ -598,7 +633,7 @@ def build_html(books: List[Book], page_title: str, page_key: str, count_label: s
 <body data-page="{page_key}">
   <main class="wrap">
     <section class="topbar">
-      <h1 class="top-title"><a href="{title_href}">{page_title}</a></h1>
+      <h1 class="top-title"><a href="{title_href}">{display_title}</a></h1>
       <span class="top-count">{count_label}: <strong>{total}</strong></span>
       <input id="q" class="search" type="search" placeholder="Filter by title...">
     </section>
@@ -734,7 +769,7 @@ def main() -> None:
     )
     book_html = build_html(
         book_books,
-        page_title="O'Reilly Japan Gallery",
+        page_title="O'Reilly Japan Book Gallery",
         page_key="book",
         count_label="Books",
     )
